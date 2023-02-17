@@ -1,10 +1,7 @@
-use std::{io, ops::{Div, Mul}};
-
-macro_rules! read_line {
-    ($x:expr) => {
-        io::stdin().read_line($x).unwrap()
-    };
-}
+use std::{
+    io,
+    ops::{Div, Mul},
+};
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => {
@@ -17,26 +14,16 @@ macro_rules! parse_input {
  * the standard input according to the problem statement.
  **/
 fn main() {
-    let mut input_line = String::new();
-    read_line!(&mut input_line);
-    let lon = input_line.trim().to_string();
-
-    let mut input_line = String::new();
-    read_line!(&mut input_line);
-    let lat = input_line.trim().to_string();
-
-    let mut input_line = String::new();
-    read_line!(&mut input_line);
-    let n = parse_input!(input_line, usize);
-
+    let lon = read_line().trim().to_string();
+    let lat = read_line().trim().to_string();
     let point_a: (&str, &str) = (&lon, &lat);
     let mut closest = Defib::default();
-    for _ in 0..n as usize {
-        let mut input_line = String::new();
-        read_line!(&mut input_line);
-        let mut defib = Defib::parse_str(input_line.trim_matches('\n'));
 
-        if closest.dist(point_a) > defib.dist(point_a) {
+    let n = parse_input!(read_line(), usize);
+    for _ in 0..n {
+        let mut defib = Defib::parse_str(read_line().trim_matches('\n'));
+
+        if closest.dist(point_a) - defib.dist(point_a) > 0.001 {
             closest = defib;
         }
     }
@@ -45,6 +32,12 @@ fn main() {
     // To debug: eprintln!("Debug message...");
 
     println!("{}", closest.name);
+}
+
+fn read_line() -> String {
+    let mut input_line = String::new();
+    io::stdin().read_line(&mut input_line).unwrap();
+    input_line
 }
 
 #[derive(Debug)]
@@ -71,7 +64,7 @@ impl Default for Defib {
 
 impl Defib {
     fn parse_str(input: &str) -> Self {
-        let split_in: Vec<&str> = input.split(";").collect();
+        let split_in: Vec<&str> = input.split(';').collect();
 
         // let id: u16 = split_in[0].parse().unwrap();
         let name = split_in[1].to_string();
@@ -89,14 +82,26 @@ impl Defib {
         }
     }
 
+    // BUG: Does not check whether the given point has changed. Prolly best to move position to
+    // global context.
     fn dist(&mut self, point_a: (&str, &str)) -> f64 {
         if let Some(dist) = self._dist {
             return dist;
         }
 
         let (lon_a, lat_a) = (
-            point_a.0.replace(',', ".").parse::<f64>().unwrap().to_radians(),
-            point_a.1.replace(',', ".").parse::<f64>().unwrap().to_radians(),
+            point_a
+                .0
+                .replace(',', ".")
+                .parse::<f64>()
+                .unwrap()
+                .to_radians(),
+            point_a
+                .1
+                .replace(',', ".")
+                .parse::<f64>()
+                .unwrap()
+                .to_radians(),
         );
 
         let x = (self.lon - lon_a) * f64::cos((lat_a + self.lat).div(2.0));
