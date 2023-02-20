@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::VecDeque, fmt::Debug, io, rc::Rc};
+use std::{collections::VecDeque, fmt::Debug, io};
 
 /// Shorthand for adding parsing into desired type and calling panic
 /// with clear message where the error ocurred.
@@ -10,8 +10,6 @@ macro_rules! parse_input {
         ))
     };
 }
-
-type NodeRef = Rc<RefCell<Node>>;
 
 const MAX_NODE_AMOUNT: usize = 500;
 
@@ -30,12 +28,11 @@ fn main() {
     let l = parse_input!(inputs[1], usize);
 
     // the number of exit gateways.
-    // TODO: consider whether to use it in verifying given data.
     let e = parse_input!(inputs[2], usize);
 
     // Whole map of the network.
-    const INIT: Option<NodeRef> = None;
-    let mut n_map: [Option<NodeRef>; MAX_NODE_AMOUNT] = [INIT; MAX_NODE_AMOUNT];
+    const INIT: Option<Node> = None;
+    let mut n_map: [Option<Node>; MAX_NODE_AMOUNT] = [INIT; MAX_NODE_AMOUNT];
 
     // read the input about node connections and build the map.
     for _ in 0..l {
@@ -48,74 +45,61 @@ fn main() {
             parse_input!(inputs[1], usize),
         );
 
-        let node_a = match n_map[nodes.0] {
-            Some(ref n) => Rc::clone(n),
+        match n_map[nodes.0] {
+            Some(ref mut n) => n.add_conn(nodes.1),
             None => {
-                let tmp = Rc::new(RefCell::new(Node::new(nodes.0)));
-                n_map[nodes.0] = Some(Rc::clone(&tmp));
-                tmp
-            }
-        };
-        let node_b = match n_map[nodes.1] {
-            Some(ref n) => Rc::clone(n),
-            None => {
-                let tmp = Rc::new(RefCell::new(Node::new(nodes.1)));
-                n_map[nodes.1] = Some(Rc::clone(&tmp));
-                tmp
+                let mut node = Node::new(nodes.0);
+                node.add_conn(nodes.1);
+                n_map[nodes.0] = Some(node);
             }
         };
 
-        node_a.borrow_mut().add_conn(Rc::clone(&node_b));
-        node_b.borrow_mut().add_conn(Rc::clone(&node_a));
+        match n_map[nodes.1] {
+            Some(ref mut n) => n.add_conn(nodes.0),
+            None => {
+                let mut node = Node::new(nodes.1);
+                node.add_conn(nodes.0);
+                n_map[nodes.1] = Some(node);
+            }
+        };
     }
 
-    for _ in 0..e {
-        let input = parse_input!(read_line().trim(), usize);
-        if let Some(ref node) = n_map[input] {
-            node.borrow_mut().gate = true;
-        }
-    }
+    let gateways: Vec<_> = (0..e)
+        .map(|_| parse_input!(read_line().trim(), usize))
+        .collect();
 
     // game loop
     loop {
         // The index of the node on which the Bobnet agent is positioned this turn
         let si = parse_input!(read_line(), usize);
-        let nsi = Rc::clone(n_map[si].as_ref().unwrap());
+        let nsi = n_map[si].as_ref().unwrap().clone();
 
         // first lets try to capture the easiest case
         {
-            let nsic = nsi.borrow();
-            if nsic.conns.len() < 2 && !nsic.conns.is_empty() {
-                let d_node = nsic.conns[0].borrow_mut();
-                println!("{} {}", nsic.id, d_node.id);
+            if nsi.conns.len() < 2 && !nsi.conns.is_empty() {
+                let d_node = n_map[nsi.conns[0]].as_ref().unwrap().id;
+                println!("{} {}", nsi.id, d_node);
 
-                disconnect(&n_map, nsic.id, d_node.id);
+                disconnect(&mut n_map, nsi.id, d_node);
                 remove(&mut n_map, n);
             }
         }
 
         // now we disconnect the immediate gatways connected to Bobnet
         {
-            let nsic_id = nsi.borrow().id;
-            let d_node_l = nsi
-                .borrow()
+            let nsic_id = nsi.id;
+            let d_node_ids = nsi
                 .conns
                 .iter()
-                .filter(|n| n.borrow().gate)
-                .map(Rc::clone)
-                .collect::<Vec<NodeRef>>();
+                .filter(|n| gateways.contains(*n))
+                .map(|nid| n_map[*nid].as_ref().unwrap().id)
+                .collect::<Vec<_>>();
 
-            if d_node_l.len() > 1 {
-                eprintln!("WARNING: We have lost. Bobnet has access to more than")
-            }
-
-            match d_node_l.get(0) {
+            match d_node_ids.get(0) {
                 Some(d_node) => {
-                    let cd_node = (**d_node).clone().into_inner();
+                    println!("{} {}", nsic_id, d_node);
 
-                    println!("{} {}", nsic_id, cd_node.id);
-
-                    disconnect(&n_map, nsic_id, cd_node.id);
+                    disconnect(&mut n_map, nsic_id, *d_node);
                     remove(&mut n_map, n);
                     continue;
                 }
@@ -125,14 +109,10 @@ fn main() {
 
         // finally, more advanced
         {
-            let mut scan_pool: VecDeque<_> = nsi
-                .borrow()
-                .conns
-                .iter()
-                .map(|n| (Rc::clone(n), nsi.borrow().id))
-                .collect();
+            let nsi_id = nsi.id;
+            let mut scan_pool: VecDeque<_> = nsi.conns.iter().map(|n| (*n, nsi_id)).collect();
 
-            let mut c_node = nsi.borrow().id; // current node
+            let mut c_node = nsi_id; // current node
 
             let mut n_pool: [(Option<usize>, Option<usize>); MAX_NODE_AMOUNT] =
                 [(None, None); MAX_NODE_AMOUNT];
@@ -140,41 +120,33 @@ fn main() {
 
             // Breadth-first search (BFS)
             while let Some(ref node_info) = scan_pool.pop_front() {
-                let nic = node_info.0.borrow().id; // node_id_cache
-                let ngc = node_info.0.borrow().gate; // node_gate_cache
+                let node = n_map[node_info.0].as_ref().unwrap().clone();
 
                 // add scanned node to n_pool
-                n_pool[nic] = (Some(nic), Some(node_info.1));
+                n_pool[node.id] = (Some(node.id), Some(node_info.1));
 
                 // test if one of gateways
-                if ngc {
-                    c_node = nic;
+                if gateways.contains(&node_info.0) {
+                    c_node = node.id;
                     break;
                 }
 
                 // add to scan_pool if scanned node is not gateway
-                for subnode in node_info.0.borrow().conns.iter() {
-                    let res = scan_pool
-                        .iter()
-                        .find(|(n, _ni)| n.borrow().id == (*subnode).borrow().id);
+                for subnode in node.conns.iter() {
+                    let res = scan_pool.iter().find(|(n, _ni)| {
+                        n_map[*n].as_ref().unwrap().id == n_map[*subnode].as_ref().unwrap().id
+                    });
 
-                    if n_pool[subnode.borrow().id].0.is_none() && res.is_none() {
-                        scan_pool.push_back((Rc::clone(subnode), nic));
+                    if n_pool[*subnode].0.is_none() && res.is_none() {
+                        scan_pool.push_back((*subnode, node.id));
                     }
                 }
             }
 
-            let mut p_node = c_node; // stores previous node id
-            c_node = n_pool[c_node].1.unwrap();
+            let (c_node, p_node) = (n_pool[c_node].0.unwrap(), n_pool[c_node].1.unwrap());
 
-            // Tracing back from BFS
-            while let Some(node) = n_pool[c_node].1 {
-                p_node = c_node;
-                c_node = node;
-            }
-
-            println!("{} {}", p_node, c_node);
-            disconnect(&n_map, p_node, c_node);
+            println!("{} {}", c_node, p_node);
+            disconnect(&mut n_map, p_node, c_node);
             remove(&mut n_map, n);
         }
     }
@@ -196,12 +168,9 @@ fn main() {
 ///
 /// May panic if given IDs are over MAX_NODE_AMOUNT or lead to non-valid node in global map.
 /// NOTE: May be good idea to make this return Result instead of panic.
-fn disconnect(n_map: &[Option<NodeRef>], node_a_id: usize, node_b_id: usize) {
-    let node_a = Rc::clone(n_map[node_a_id].as_ref().unwrap());
-    let node_b = Rc::clone(n_map[node_b_id].as_ref().unwrap());
-
-    node_a.borrow_mut().remove_conn(&Rc::clone(&node_b));
-    node_b.borrow_mut().remove_conn(&Rc::clone(&node_a));
+fn disconnect(n_map: &mut [Option<Node>], node_a_id: usize, node_b_id: usize) {
+    n_map[node_a_id].as_mut().unwrap().remove_conn(node_b_id);
+    n_map[node_b_id].as_mut().unwrap().remove_conn(node_a_id);
 }
 
 /// Removes disconnected node from Global map
@@ -209,13 +178,13 @@ fn disconnect(n_map: &[Option<NodeRef>], node_a_id: usize, node_b_id: usize) {
 /// # Panics
 ///
 /// May panic if unable retrieve NodeRef.
-fn remove(n_map: &mut [Option<NodeRef>], nc: usize) {
+fn remove(n_map: &mut [Option<Node>], nc: usize) {
     let d_nodes: Vec<_> = n_map[..nc]
         .iter()
         .enumerate()
         .filter(|(_, n)| n.is_some())
         .map(|(i, n)| (i, n.as_ref().unwrap()))
-        .filter(|(_, n)| n.borrow().conns.is_empty())
+        .filter(|(_, n)| n.conns.is_empty())
         .map(|(i, _n)| i)
         .collect();
 
@@ -235,32 +204,30 @@ fn read_line() -> String {
 #[derive(Default, Clone, Eq)]
 struct Node {
     id: usize,
-    gate: bool,
-    conns: VecDeque<NodeRef>,
+    conns: VecDeque<usize>,
 }
 
 impl Node {
     fn new(id: usize) -> Self {
         Self {
             id,
-            gate: false,
             conns: VecDeque::new(),
         }
     }
 
     /// method for quicker access to Vec::push
     #[inline]
-    fn add_conn(&mut self, node: NodeRef) {
+    fn add_conn(&mut self, node: usize) {
         self.conns.push_back(node);
     }
 
     #[inline]
-    fn remove_conn(&mut self, node: &NodeRef) {
+    fn remove_conn(&mut self, node: usize) {
         let node_index = self
             .conns
             .iter()
             .enumerate()
-            .find(|(_i, n)| n.borrow().id == node.borrow().id)
+            .find(|(_i, n)| **n == node)
             .unwrap()
             .0;
         self.conns.remove(node_index);
@@ -287,16 +254,6 @@ impl PartialOrd for Node {
 
 impl Debug for Node {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let node_str: Vec<_> = self
-            .conns
-            .iter()
-            .map(|n| format!("Node{}", n.borrow().id))
-            .collect();
-
-        write!(
-            f,
-            "Node {{ id: {}, gate: {}, conns: {:?}}}",
-            self.id, self.gate, node_str
-        )
+        write!(f, "Node {{ id: {}, conns: {:?}}}", self.id, self.conns)
     }
 }
